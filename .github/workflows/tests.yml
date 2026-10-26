@@ -1,0 +1,120 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_ANALYTICS: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
+
+jobs:
+  cask:
+    name: ${{ matrix.cask }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-14 is Apple silicon. macos-15-intel is the Intel runner
+        # that replaced macos-13 (retired by GitHub on 2025-12-04).
+        os: [macos-14, macos-15-intel]
+        cask: [leanmark, leandoc]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update Homebrew
+        run: |
+          brew update
+          brew --version
+
+      - name: Tap this checkout and trust it
+        run: |
+          brew tap abooodbah/tap "$GITHUB_WORKSPACE"
+          # Homebrew 6+ refuses to load non-official taps until trusted.
+          brew trust abooodbah/tap
+
+      - name: brew style
+        run: brew style abooodbah/tap/${{ matrix.cask }}
+
+      - name: brew audit --online
+        run: brew audit --cask --online abooodbah/tap/${{ matrix.cask }}
+
+      - name: brew audit --new (informational)
+        # --new adds the homebrew/cask notability check (GitHub stars,
+        # forks, watchers), which applies to the official tap, not to a
+        # personal tap. Recorded here so the result is visible.
+        continue-on-error: true
+        run: brew audit --cask --new --online abooodbah/tap/${{ matrix.cask }}
+
+      - name: brew install --cask
+        run: brew install --cask abooodbah/tap/${{ matrix.cask }}
+
+      - name: Inspect the installed app
+        id: inspect
+        run: |
+          app_name="$(brew info --cask --json=v2 abooodbah/tap/${{ matrix.cask }} \
+            | ruby -rjson -e 'a = JSON.parse(STDIN.read)["casks"][0]["artifacts"].find { |x| x["app"] }; puts a["app"][0]')"
+          app="/Applications/${app_name}"
+          exe="${app_name%.app}"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+          test -d "$app"
+          echo "--- architectures"
+          lipo -archs "$app/Contents/MacOS/$exe"
+          echo "--- signature"
+          codesign -dv "$app" 2>&1 | grep -E 'Identifier|Signature|TeamIdentifier|flags'
+          codesign --verify --deep --strict "$app"
+          echo "--- quarantine attribute set by Homebrew"
+          xattr -p com.apple.quarantine "$app" || echo "no quarantine attribute"
+          echo "--- Gatekeeper assessment (what a user's first launch meets)"
+          spctl --assess --type execute -vv "$app" 2>&1 || echo "Gatekeeper rejects this app (expected: not notarized)"
+
+      - name: Launch check
+        env:
+          APP: ${{ steps.inspect.outputs.app }}
+          EXE: ${{ steps.inspect.outputs.exe }}
+        run: |
+          # A person approves the first launch in System Settings. CI has no
+          # person, so the test copy drops the quarantine attribute before
+          # launching. This tests that the binary starts on this CPU and
+          # macOS; the Gatekeeper result is recorded in the previous step.
+          xattr -dr com.apple.quarantine "$APP"
+          open -a "$APP"
+          for _ in $(seq 1 30); do
+            if pgrep -x "$EXE" >/dev/null; then break; fi
+            sleep 1
+          done
+          pgrep -lx "$EXE"
+          sleep 3
+          # Still running after three seconds, so it did not crash on start.
+          pgrep -x "$EXE" >/dev/null
+          osascript -e "quit app \"$EXE\""
+          for _ in $(seq 1 20); do
+            if ! pgrep -x "$EXE" >/dev/null; then break; fi
+            sleep 1
+          done
+          if pgrep -x "$EXE" >/dev/null; then
+            echo "$EXE did not quit"
+            exit 1
+          fi
+          echo "$EXE started and quit cleanly"
+
+      - name: brew uninstall --cask --zap
+        env:
+          APP: ${{ steps.inspect.outputs.app }}
+        run: |
+          brew uninstall --cask --zap abooodbah/tap/${{ matrix.cask }}
+          test ! -e "$APP"
