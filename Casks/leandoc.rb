@@ -1,6 +1,6 @@
 cask "leandoc" do
-  version "0.1.4"
-  sha256 "e09ca49e2aea89b77166687430297b7c917b05938e36572a221aac604a176a65"
+  version "0.2.0"
+  sha256 "6d3441d605a78843f7ff3285204e48eb4d1552e7c87f8bcd97efa648f7ae69c7"
 
   url "https://github.com/abooodbah/leandoc/releases/download/v#{version}/LeanDoc-v#{version}-macos-universal-preview.zip"
   name "LeanDoc"
