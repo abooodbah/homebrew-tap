@@ -1,6 +1,6 @@
 cask "leanmark" do
-  version "0.7.0"
-  sha256 "fe887b76d2dda188734f1f30d84e06b17f1d1fa2d7dc573b4f648c712514d21d"
+  version "0.7.1"
+  sha256 "ab2d4ec18867978f5d3b575ecff1023dda7d54e7c34d1283801899367e634365"
 
   url "https://github.com/abooodbah/leanmark/releases/download/v#{version}/LeanMark-v#{version}-macos-universal-preview.zip"
   name "LeanMark"
